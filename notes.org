@@ -2,6 +2,14 @@
   :PROPERTIES:
   :EXPORT_FILE_NAME: aquaya_discussion.ipynb
   :END:
+** Preface
+#+begin_src ipython
+!pip install CFEDemands
+!pip install dvc[gdrive]
+!pip install h5netcdf
+!pip install xarray
+
+#+end_src
 ** Data
    Playing around with three waves of data from a set of household
    surveys conducted in Ghana by Yale/Northwestern.   Our focus is on
@@ -41,7 +49,7 @@ import pandas as pd
 import cfe
 import numpy as np
 import matplotlib.pyplot as plt
-#%matplotlib inline
+%matplotlib inline
 import matplotlib.cm as cm
 
 result = cfe.from_dataset('./result.ds')
@@ -143,10 +151,11 @@ pl.savefig('loglambda_by_year.png')
 ** Selected estimated elasticities (bigger is better)
 #+begin_src ipython
 import cfe
+import pandas as pd
+
 r = cfe.from_dataset('./result.ds')
 
-r.get_beta(as_df=True).sort_values(ascending=False)
-
+pd.DataFrame({'beta':r.get_beta(as_df=True).sort_values(ascending=False)})
 #+end_src
 
 
@@ -154,22 +163,27 @@ Demand response to household size and composition
 #+begin_src ipython
 import pandas as pd
 
-pd.concat([r.delta.sel(i='Water (piped)').to_dataframe(),
-           r.se_delta.sel(i='Water (piped)').to_dataframe()],axis=1)
+pd.concat([r.delta.sel(i='Water (piped)',drop=True).to_dataframe(),
+           r.se_delta.sel(i='Water (piped)',drop=True).to_dataframe()],axis=1)
 #+end_src
 ** Demands
 
- As mentioned above, we've estimated the parameters of a Frischian
+ We've estimated the parameters of a Frischian
  demand system (demands that depend on prices and the households
  marginal utility of expenditures).  But we can /compute/ the
  corresponding Marshallian (depends on prices and budget) or Hicksian
  (depends on prices and the level of utility) demands for this same
- population, using the =cfe.Result.demands= method.  
+ population, using the =cfe.Result.demands= method.  An important
+ proviso is that this transformation assumes that our demand system is
+ complete.  This is certainly not the case here, but maybe the
+ resulting error isn't too large?
 
- Let's compute Marshallian demands.  Start with a choice of budget $x$
- and prices.  We'll use the earliest prices, and focus on
- the first market we're interested in.
+ In any event let's compute Marshallian demands.  Start with a choice
+ of budget $x$ and prices.  We'll use the earliest prices, and focus
+ on the first market we're interested in.
  #+begin_src ipython :results silent
+import numpy as np
+
 t = r.firstround  # First round
 m = r.coords['m'][0] # First market
 
