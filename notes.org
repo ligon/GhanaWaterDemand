@@ -1,0 +1,241 @@
+* Notes for Aquaya Discussion
+  :PROPERTIES:
+  :EXPORT_FILE_NAME: aquaya_discussion.ipynb
+  :END:
+** Data
+   Playing around with three waves of data from a set of household
+   surveys conducted in Ghana by Yale/Northwestern.   Our focus is on
+   data recorded for consumption expenditures; we want to use these
+   data to estimate a system of demand functions.  With these we can
+   back out a measure of welfare.
+** Notation
+   At time $t$ we have
+    - $z_t$ :: Household characteristics (e.g., household size, composition)
+    - $x_t$ :: Household budget
+    - $p_t$ :: Vector of prices at time $t$
+    - $c_t$ :: vector of quantities of goods
+*** Demands
+    For each /observed/ good $i$:
+    \[
+       \log c_{i}(x_t,p_t,z_t) = \gamma_i(p_t) + \delta_i(z_t) +
+    \beta_i\log\lambda(x_t,p_t,z_t) + \epsilon_{it}
+    \]
+    Here the functions $\gamma_i$, $\delta_i$, and \lambda are objects
+    we could consider estimating non-parametrically.
+** Change of variables
+   It's hard to observe full budgets and all prices.  Instead, assume
+   that all households in the same area face the same prices at any
+   point in time, so that $\gamma_{it} = \gamma_i(p_t)$ is common to
+   all households; note similarly that $\lambda(x,p,t)$ is constant
+   for a given household-period across goods.  So for household $j$ estimate:
+    \[
+       \log c^j_{it} = \gamma_{it} + \delta_i(z^j_t) + \beta_i\log\lambda^j_t + \epsilon^j_{it};
+    \]
+   The function $\delta_i$ is unrestricted, but everything else can
+   now be estimated using linear methods (and in practice we take the
+   $\delta_i$ functions to also be linear). 
+** Fit
+   For our Ghana data
+#+begin_src ipython :exports none :tangle /tmp/actual_vs_predicted.py
+import pandas as pd
+import cfe
+import numpy as np
+import matplotlib.pyplot as plt
+#%matplotlib inline
+import matplotlib.cm as cm
+
+result = cfe.from_dataset('./result.ds')
+
+zeros_r = cfe.Result(y=(0.+(np.exp(result.y)>0)),z=result.z)
+weights = zeros_r.get_predicted_log_expenditures()
+
+# Truncate to make weights live in [0,1]
+weights = weights.where((weights<1) + np.isnan(weights),1).where((weights>0) + np.isnan(weights),0)
+
+xbar = np.exp(result.y).sum(['m','i']).to_dataframe('xbar').replace(0,np.nan).squeeze()
+
+# Calculate *expected* predicted expenditures, to make unconditional on being positive
+xhat = (weights*result.get_predicted_expenditures())
+xsum = xhat.sum(['m','i']).to_dataframe('xhat').replace(0,np.nan).squeeze()
+
+# Make dataframe of actual & predicted
+df = pd.DataFrame({'Actual':np.log(xbar),'Predicted':np.log(xsum)})
+
+df.plot.hexbin(x='Predicted',y='Actual',marginals=False)
+
+# Add 45 degree line
+v = plt.axis()
+vmin = np.max([v[0],v[2]])
+vmax = np.max([v[1],v[3]])
+plt.plot([vmin,vmax],[vmin,vmax])
+plt.savefig('actual_vs_predicted_scatter.png')
+#+end_src
+
+
+
+[[./actual_vs_predicted_scatter.png]]
+
+** Log lambdas
+   The clever bit of this is that the estimated parameters
+   $\lambda_t^j$ turn out to have a very concrete economic
+   interpretation---they're the /rate at which utility will increase
+   with increases in the budget/, or what economists would call the
+   /marginal utility of expenditures/.  
+#+begin_src ipython :tangle /tmp/loglambda_by_year.py
+import cfe
+import numpy as np
+import pylab as pl
+
+P0init = 0.125
+
+r = cfe.from_dataset('./result.ds')
+
+logL = r.get_loglambdas()
+r.get_alpha()
+
+pds = r.a_decomposition()
+
+logL_tm = pds.lbar
+
+logL = logL + logL_tm
+
+logL = logL.squeeze().drop('m').to_dataframe('logL').unstack('t')
+logL.columns = logL.columns.droplevel(0)
+
+#logL=logL.dropna(axis=0,how='any') # For balanced panel
+
+L09=logL['2009-10'].dropna()
+
+fig, ax = pl.subplots(1,3,sharex=True,sharey=True)
+
+p=logL.hist(ax=ax,bins=int(np.ceil(np.sqrt(logL.shape[0]))),sharex=True,sharey=True,density=True)
+
+if P0init:
+    zlambda=L09.quantile(1-P0init)
+
+    P0=(logL>zlambda).sum()/(~logL.isnull()).sum()  # Boolean evaluation of NaN>x means .mean() won't work
+    P0.name=r'\lambda-based P_0'
+    #print(df_to_orgtbl(P0))
+    #print(" - lambda Poverty line: %5.4f" % zlambda)
+
+    idx=0
+    for i in range(3):
+            ax[i].set_xlim([-5,5])
+            ax[i].axvline(zlambda,color='red')
+            ax[i].set_title(str(logL.columns[idx])+': $P_0=%3.2f$' % P0.iloc[idx])
+            idx += 1
+
+fig.add_subplot(111, frameon=False)
+# hide tick and tick label of the big axes
+
+pl.tick_params(labelcolor='none', top='off', bottom='off', left='off', right='off')
+pl.xlabel('Distributions of $\log\lambda$ by Year')
+pl.ylabel('Frequency')
+
+pl.savefig('loglambda_by_year.png')
+#+end_src
+
+#+results:
+
+[[./loglambda_by_year.png]]
+#+results:
+
+** Selected estimated elasticities (bigger is better)
+#+begin_src ipython
+import cfe
+r = cfe.from_dataset('./result.ds')
+
+r.get_beta(as_df=True).sort_values(ascending=False)
+
+#+end_src
+
+
+Demand response to household size and composition
+#+begin_src ipython
+import pandas as pd
+
+pd.concat([r.delta.sel(i='Water (piped)').to_dataframe(),
+           r.se_delta.sel(i='Water (piped)').to_dataframe()],axis=1)
+#+end_src
+** Demands
+
+ As mentioned above, we've estimated the parameters of a Frischian
+ demand system (demands that depend on prices and the households
+ marginal utility of expenditures).  But we can /compute/ the
+ corresponding Marshallian (depends on prices and budget) or Hicksian
+ (depends on prices and the level of utility) demands for this same
+ population, using the =cfe.Result.demands= method.  
+
+ Let's compute Marshallian demands.  Start with a choice of budget $x$
+ and prices.  We'll use the earliest prices, and focus on
+ the first market we're interested in.
+ #+begin_src ipython :results silent
+t = r.firstround  # First round
+m = r.coords['m'][0] # First market
+
+x = r.get_predicted_expenditures().sum('i')
+median_x = x.where(x>0).sel(t=t,m=m).median('j') # Budget (median household)
+
+# Note selection of prices for 2009
+p = np.exp(r.get_alpha(as_df=True))
+
+p.fillna(1).squeeze()
+ #+end_src
+
+ Now compute expenditures on different items.  The object =r= already knows what the estimated
+ parameters are, and uses those automatically:
+
+ #+begin_src ipython
+c=r.demands(median_x,p)
+c
+ #+end_src
+
+ Now we can trace out demands for a household with median budget but
+ varying prices of piped water (holding other prices fixed):
+ #+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+%matplotlib inline
+
+USE_GOOD = 'Water (piped)'
+    
+# Values for prices
+ref_price = p[USE_GOOD]
+P = np.linspace(ref_price/5,ref_price*5,50)
+
+def my_prices(p0,p=p,i=USE_GOOD):
+    p = p.copy()
+    p.loc[i] = p0
+    return p
+
+for myx in [median_x*s for s in [.25,.5,1.,2,4]]:
+    plt.plot([r.demands(myx,my_prices(p0))[USE_GOOD] for p0 in P],P)
+
+plt.xlabel("%s " % USE_GOOD)
+plt.ylabel('Price Scale')
+ #+end_src
+
+ And here are Engel curves (response to budget) holding prices fixed:
+ #+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+%matplotlib inline
+
+    
+# Values for prices
+ref_price = p[USE_GOOD]
+
+# Range of budgets to consider
+X = np.linspace(median_x/10,median_x*10,50)
+
+plt.plot(X,[r.demands(x,ref_price)[USE_GOOD] for x in X])
+
+plt.ylabel(USE_GOOD)
+plt.xlabel('Budget')
+ #+end_src
+
+
+
+
+
+
